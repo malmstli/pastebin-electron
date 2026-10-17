@@ -26,6 +26,14 @@ function showMessage(text) {
 window.electronAPI.onStatus((newStatus) => {
     status.textContent = newStatus;
     status.classList.toggle("connected", newStatus === "Connected");
+
+    if (newStatus === "Connected") {
+        showMessage("Connected to WebSocket!");
+    } else if (newStatus === "Connecting...") {
+        showMessage("Connecting to WebSocket...");
+    } else {
+        showMessage("Disconnected from WebSocket.");
+    }
 });
 
 // Incoming WebSocket text

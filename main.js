@@ -27,7 +27,6 @@ function disconnectWebSocket() {
     if (socket) {
         const oldSocket = socket;
         socket = null;
-        oldSocket.removeAllListeners();
         oldSocket.terminate();
     }
 
@@ -90,6 +89,7 @@ function connectWebSocket() {
 }
 
 ipcMain.handle("ws:connect", () => {
+    disconnectWebSocket();
     connectWebSocket();
 });
 
