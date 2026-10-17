@@ -11,39 +11,203 @@ const fs = require("fs");
 const WebSocket = require("ws");
 
 const API_URL = "https://womp1loginapi.onrender.com";
-
 const WS_URL = "wss://ws-pastebin.onrender.com/";
-let socket = null;
 
+let socket = null;
+let accessToken = null;
+let refreshToken = null;
+let refreshTimer = null;
+let refreshPromise = null;
+
+// Token storage
+function getTokenPath() {
+    return path.join(app.getPath("userData"), "tokens.dat");
+}
+
+function saveTokens(access, refresh) {
+    if (!safeStorage.isEncryptionAvailable()) {
+        throw new Error("Secure storage is not available");
+    }
+
+    const tokens = JSON.stringify({
+        accessToken: access,
+        refreshToken: refresh
+    });
+
+    const encrypted = safeStorage.encryptString(tokens);
+    fs.writeFileSync(getTokenPath(), encrypted);
+
+    accessToken = access;
+    refreshToken = refresh;
+}
+
+function loadTokens() {
+    try {
+        if (!safeStorage.isEncryptionAvailable()) {
+            return false;
+        }
+
+        const encrypted = fs.readFileSync(getTokenPath());
+        const tokens = JSON.parse(safeStorage.decryptString(encrypted));
+
+        accessToken = tokens.accessToken;
+        refreshToken = tokens.refreshToken;
+
+        return Boolean(accessToken && refreshToken);
+    } catch {
+        return false;
+    }
+}
+
+function clearTokens() {
+    accessToken = null;
+    refreshToken = null;
+
+    clearTimeout(refreshTimer);
+    refreshTimer = null;
+
+    try {
+        fs.unlinkSync(getTokenPath());
+    } catch {
+        // No saved tokens
+    }
+
+    // Remove old token file from previous version
+    try {
+        fs.unlinkSync(path.join(app.getPath("userData"), "token.dat"));
+    } catch {
+        // No old token
+    }
+}
+
+// Check JWT expiration
+function getTokenExpiry(token) {
+    try {
+        const payload = JSON.parse(
+            Buffer.from(token.split(".")[1], "base64url").toString()
+        );
+
+        return payload.exp * 1000 || 0;
+    } catch {
+        return 0;
+    }
+}
+
+function tokenExpired(token) {
+    return !token || Date.now() >= getTokenExpiry(token);
+}
+
+// Send connection status to frontend
 function sendStatus(text) {
     for (const win of BrowserWindow.getAllWindows()) {
-        if (!win.isDestroyed()) {
+        if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
             win.webContents.send("ws:status", text);
         }
     }
 }
 
+// Disconnect WebSocket
 function disconnectWebSocket() {
     if (socket) {
         const oldSocket = socket;
         socket = null;
+
+        // Keep error listeners to prevent unhandled errors
         oldSocket.terminate();
     }
 
     sendStatus("Disconnected");
 }
 
-function connectWebSocket() {
-    if (!accessToken || tokenExpired(accessToken)) {
-        disconnectWebSocket();
-        return;
+// Refresh access token
+async function refreshAccessToken() {
+    if (refreshPromise) {
+        return refreshPromise;
+    }
+
+    refreshPromise = (async () => {
+        if (!refreshToken || tokenExpired(refreshToken)) {
+            return false;
+        }
+
+        try {
+            const response = await fetch(`${API_URL}/refresh`, {
+                method: "POST",
+                headers: {
+                    jwtRef: `Bearer ${refreshToken}`
+                }
+            });
+
+            if (!response.ok) {
+                return false;
+            }
+
+            const data = await response.json();
+
+            if (!data.jwtAccess) {
+                return false;
+            }
+
+            saveTokens(data.jwtAccess, data.jwtRef || refreshToken);
+            scheduleRefresh();
+
+            return true;
+        } catch (error) {
+            console.error("Refresh error:", error.message);
+            return false;
+        }
+    })();
+
+    try {
+        return await refreshPromise;
+    } finally {
+        refreshPromise = null;
+    }
+}
+
+// Refresh automatically before expiration
+function scheduleRefresh() {
+    clearTimeout(refreshTimer);
+
+    if (!accessToken) return;
+
+    const delay = Math.max(
+        0,
+        getTokenExpiry(accessToken) - Date.now() - 60000
+    );
+
+    refreshTimer = setTimeout(async () => {
+        const success = await refreshAccessToken();
+
+        if (success) {
+            disconnectWebSocket();
+            connectWebSocket();
+        } else {
+            disconnectWebSocket();
+            clearTokens();
+            sendStatus("Session expired");
+        }
+    }, delay);
+}
+
+// Connect WebSocket
+async function connectWebSocket() {
+    if (tokenExpired(accessToken)) {
+        const success = await refreshAccessToken();
+
+        if (!success) {
+            disconnectWebSocket();
+            clearTokens();
+            sendStatus("Session expired");
+            return false;
+        }
     }
 
     if (socket && (
         socket.readyState === WebSocket.OPEN ||
         socket.readyState === WebSocket.CONNECTING
     )) {
-        return;
+        return true;
     }
 
     disconnectWebSocket();
@@ -68,7 +232,9 @@ function connectWebSocket() {
 
             if (result.status === 0) {
                 for (const win of BrowserWindow.getAllWindows()) {
-                    win.webContents.send("ws:message", result.msg);
+                    if (!win.isDestroyed()) {
+                        win.webContents.send("ws:message", result.msg);
+                    }
                 }
             }
         } catch (error) {
@@ -79,20 +245,30 @@ function connectWebSocket() {
     ws.on("error", (error) => {
         if (socket !== ws) return;
         console.error("WebSocket error:", error.message);
+        sendStatus("Connection error");
     });
 
     ws.on("close", () => {
         if (socket !== ws) return;
+
         socket = null;
         sendStatus("Disconnected");
     });
+
+    return true;
 }
 
-ipcMain.handle("ws:connect", () => {
+// Reconnect
+ipcMain.handle("ws:connect", async () => {
+    if (socket && socket.readyState === WebSocket.CONNECTING) {
+        return;
+    }
+
     disconnectWebSocket();
-    connectWebSocket();
+    await connectWebSocket();
 });
 
+// Send text
 ipcMain.handle("ws:send", (event, text) => {
     if (!socket || socket.readyState !== WebSocket.OPEN) {
         return false;
@@ -106,66 +282,10 @@ ipcMain.handle("ws:send", (event, text) => {
     return true;
 });
 
-let accessToken = null;
-
-// File for encrypted token
-function getTokenPath() {
-    return path.join(app.getPath("userData"), "token.dat");
-}
-
-// Save token securely
-function saveToken(token) {
-    if (!safeStorage.isEncryptionAvailable()) {
-        throw new Error("Secure storage is not available");
-    }
-
-    const encrypted = safeStorage.encryptString(token);
-
-    fs.writeFileSync(getTokenPath(), encrypted);
-    accessToken = token;
-}
-
-// Load saved token
-function loadToken() {
-    try {
-        if (!safeStorage.isEncryptionAvailable()) {
-            return null;
-        }
-
-        const encrypted = fs.readFileSync(getTokenPath());
-        return safeStorage.decryptString(encrypted);
-    } catch {
-        return null;
-    }
-}
-
-// Clear saved token
-function clearToken() {
-    accessToken = null;
-
-    try {
-        fs.unlinkSync(getTokenPath());
-    } catch {
-        // No saved token
-    }
-}
-
-// Check token expiration
-function tokenExpired(token) {
-    try {
-        const payload = JSON.parse(
-            Buffer.from(token.split(".")[1], "base64url").toString()
-        );
-
-        return !payload.exp || Date.now() >= payload.exp * 1000;
-    } catch {
-        return true;
-    }
-}
-
 // Login through Electron main process
 ipcMain.handle("auth:login", async (event, username, password) => {
     disconnectWebSocket();
+
     try {
         const response = await fetch(`${API_URL}/users/login`, {
             method: "POST",
@@ -184,14 +304,15 @@ ipcMain.handle("auth:login", async (event, username, password) => {
 
         const data = await response.json();
 
-        if (!data.jwt) {
+        if (!data.jwtAccess || !data.jwtRef) {
             return {
                 success: false,
-                message: "No token received."
+                message: "Login tokens missing."
             };
         }
 
-        saveToken(data.jwt);
+        saveTokens(data.jwtAccess, data.jwtRef);
+        scheduleRefresh();
 
         return { success: true };
 
@@ -206,22 +327,63 @@ ipcMain.handle("auth:login", async (event, username, password) => {
 });
 
 // Check saved login
-ipcMain.handle("auth:check", () => {
-    accessToken = loadToken();
-
-    if (!accessToken || tokenExpired(accessToken)) {
-        clearToken();
+ipcMain.handle("auth:check", async () => {
+    if (!loadTokens()) {
         return false;
     }
 
+    if (tokenExpired(refreshToken)) {
+        clearTokens();
+        return false;
+    }
+
+    if (tokenExpired(accessToken)) {
+        const success = await refreshAccessToken();
+
+        if (!success) {
+            clearTokens();
+            return false;
+        }
+    }
+
+    scheduleRefresh();
     return true;
 });
 
-// Local logout for now
-ipcMain.handle("auth:logout", () => {
-    disconnectWebSocket();
-    clearToken();
-    return true;
+// Logout through API
+ipcMain.handle("auth:logout", async () => {
+    const token = refreshToken;
+
+    try {
+        if (token) {
+            const response = await fetch(`${API_URL}/refresh`, {
+                method: "DELETE",
+                headers: {
+                    jwtRef: `Bearer ${token}`
+                }
+            });
+
+            if (!response.ok) {
+                return {
+                    success: false,
+                    message: "Logout failed. Please try again."
+                };
+            }
+        }
+
+        disconnectWebSocket();
+        clearTokens();
+
+        return { success: true };
+
+    } catch (error) {
+        console.error("Logout error:", error.message);
+
+        return {
+            success: false,
+            message: "Could not connect to logout server."
+        };
+    }
 });
 
 // Create Electron window

@@ -31,6 +31,10 @@ window.electronAPI.onStatus((newStatus) => {
         showMessage("Connected to WebSocket!");
     } else if (newStatus === "Connecting...") {
         showMessage("Connecting to WebSocket...");
+    } else if (newStatus === "Session expired") {
+        showPage(false);
+        loginMessage.textContent = "Session expired. Please log in again.";
+        showMessage("");
     } else {
         showMessage("Disconnected from WebSocket.");
     }
@@ -97,7 +101,12 @@ reconnectBtn.addEventListener("click", async () => {
 
 // Logout
 logoutBtn.addEventListener("click", async () => {
-    await window.electronAPI.logout();
+    const result = await window.electronAPI.logout();
+
+    if (!result.success) {
+        showMessage(result.message);
+        return;
+    }
 
     showPage(false);
     loginForm.reset();
