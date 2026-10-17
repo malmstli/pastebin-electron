@@ -1,0 +1,27 @@
+{
+  "name": "pastebin-electron",
+  "version": "1.0.0",
+  "description": "Desktop app för WebSocket Pastebin i projekt 2",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/malmstli/pastebin-electron.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/malmstli/pastebin-electron/issues"
+  },
+  "homepage": "https://github.com/malmstli/pastebin-electron#readme",
+  "devDependencies": {
+    "electron": "^44.9.0"
+  },
+  "dependencies": {
+    "ws": "^8.22.0"
+  }
+}

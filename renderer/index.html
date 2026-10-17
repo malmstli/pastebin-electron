@@ -1,0 +1,74 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket Pastebin</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="app.js" defer></script>
+</head>
+<body>
+
+    <div class="container">
+        <header>
+            <h1>Pastebin</h1>
+            <p>Share text instantly between your devices.</p>
+        </header>
+
+        <!-- Login -->
+        <section id="login-section" class="card">
+            <h2>Login</h2>
+
+            <form id="login-form">
+                <p id="login-message"></p>
+                <input
+                    type="text"
+                    id="username"
+                    placeholder="Username"
+                    autocomplete="username"
+                    required
+                >
+
+                <input
+                    type="password"
+                    id="password"
+                    placeholder="Password"
+                    autocomplete="current-password"
+                    required
+                >
+
+                <button type="submit">Login</button>
+            </form>
+        </section>
+
+        <!-- Pastebin -->
+        <section id="pastebin-section" class="card" hidden>
+
+            <div class="top-bar">
+                <h2>Your Pastebin</h2>
+                <button id="logout-btn">Logout</button>
+            </div>
+
+            <div class="connection">
+                <span id="status">Disconnected</span>
+                <button id="reconnect-btn">Reconnect</button>
+            </div>
+
+            <textarea
+                id="text-input"
+                placeholder="Write or paste your text here..."
+                rows="10"
+            ></textarea>
+
+            <div class="actions">
+                <button id="send-btn">Send</button>
+                <button id="copy-btn">Copy</button>
+            </div>
+
+            <p id="message"></p>
+        </section>
+    </div>
+
+</body>
+</html>
